@@ -57,13 +57,15 @@ First method: PCA.
 '''
 
 import cv2 as cv
+import numpy as np
 
 # Standard resolution of images after processing.
 STD_WIDTH = 512
 STD_HEIGHT = 512
 
 # Thresholding parameter.
-THRESH = 22
+# THRESH = 22
+THRESH = 12
 
 # Hough Circle Transform parameters.
 DP = 1  # Inverse accumulator ratio.
@@ -74,11 +76,11 @@ MIN_R = int(STD_HEIGHT * 0.4)
 MAX_R = STD_HEIGHT
 
 
-def load_image(path, grayscale=True, equalize=True, resize=True):
+def load_image(path, grayscale=True, equalize=False, resize=True):
     """
-    Loads an image in numpy format, reduces to grayscale, equalizes the image,
-    and finally resizes the image to a standard resolution. Each operation is
-    default but optional.
+    Loads an image, transforms it to grayscale, and resizes it. Optionally
+    equalizes the image's histogram. Equalization seems to play poorly with
+    preprocessing however, so by default it is turned off.
     :param path: Path to the image file.
     :param grayscale: Flag for converting image to grayscale.
     :param equalize: Flag for equalizing the image's histogram.
@@ -100,6 +102,12 @@ def load_image(path, grayscale=True, equalize=True, resize=True):
     return img_in
 
 
+def threshold(img):
+    """ Thresholds image according to global parameter. """
+    _, output = cv.threshold(img, THRESH, 255, cv.THRESH_BINARY)
+    return output
+
+
 def hough_circles(img):
     """
     Apply Hough Circle Transform using global parameters and returns data in
@@ -110,9 +118,25 @@ def hough_circles(img):
     :rtype: list[(int, int, float)]
     """
     global DP, MD, P1, P2, MIN_R, MAX_R
+
+    #TODO TESTING
+    h, w = img.shape
+    half_h, half_w = (int(h / 2), int(w / 2))
+
+    # cv.rectangle(img, (0, 0), (half_w, half_h),
+    #              (0, 0, 0), thickness=cv.FILLED)
+    # cv.rectangle(img, (half_w, half_h), (w, h),
+    #              (0, 0, 0), thickness=cv.FILLED)
+
+    cv.rectangle(img, (0, 0), (half_w, h),
+                 (0, 0, 0), thickness=cv.FILLED)
+    cv.rectangle(img, (0, h), (w, half_h),
+                 (0, 0, 0), thickness=cv.FILLED)
+
     circles = cv.HoughCircles(img, cv.HOUGH_GRADIENT, DP, MD,
                               param1=P1, param2=P2,
                               minRadius=MIN_R, maxRadius=MAX_R)
+    #TODO TESTING
 
     output = []
     if circles is not None:
@@ -148,7 +172,7 @@ def experiment_threshold(path):
     :param str path: Path to the experiment image file.
     """
     img = load_image(path)
-    _, thresh_img = cv.threshold(img, 0, 255, cv.THRESH_BINARY)
+    _, thresh_img = cv.threshold(img, THRESH, 255, cv.THRESH_BINARY)
 
     # Image windows for this experiment.
     t_window = "Threshold Experiment"
@@ -163,7 +187,7 @@ def experiment_threshold(path):
         return
 
     # Create the experiment and original image windows.
-    cv.createTrackbar("Threshold", t_window, 0, 255, thresh_callback)
+    cv.createTrackbar("Threshold", t_window, THRESH, 255, thresh_callback)
     cv.imshow(t_window, thresh_img)
     cv.imshow(o_window, img)
     cv.waitKey(0)
@@ -210,12 +234,70 @@ def experiment_hough(path):
     cv.waitKey(0)
 
 
-def experiment_blob(path):
+def experiment_notch_detection(path):
+    # Get thresholded image and hough circles.
+    img = load_image(path)
+    img_thresh = threshold(img)
+    circles = hough_circles(img)
 
+    # Paint out the first circle detected. Assume that only one circle was
+    # detected for whole image.
+    x, y, r = circles[0]
+    cv.circle(img_thresh, (x, y), r, (0, 0, 0), cv.FILLED)
+
+    # Paint out the NW, SW, and SE quadrants of the image as only the
+    # NE quadrant will contain a notch if present.
+    h, w = img_thresh.shape
+    half_h, half_w = (int(h / 2), int(w / 2))
+    cv.rectangle(img_thresh, (0, 0), (half_w, h),
+                 (0, 0, 0), thickness=cv.FILLED)
+    cv.rectangle(img_thresh, (0, h), (w, half_h),
+                 (0, 0, 0), thickness=cv.FILLED)
+
+    # Erode what's left to try and remove edges.
+    img_thresh = cv.erode(img_thresh, np.ones((3, 3), np.uint8))
+    img_thresh = cv.dilate(img_thresh, np.ones((3, 3), np.uint8))
+
+    # Run blob detection on what's left.
+    # Set up the detector with default parameters.
+    blob_params = cv.SimpleBlobDetector_Params()
+    blob_params.minThreshold = 0.0
+    blob_params.maxThreshold = THRESH
+    blob_params.thresholdStep = THRESH / 2
+    blob_params.filterByArea = False
+    blob_params.filterByColor = False
+    blob_params.filterByConvexity = False
+    # blob_params.filterByInertia = False
+    blob_params.minInertiaRatio = 0.05
+    blob_params.maxInertiaRatio = 1
+    sbd = cv.SimpleBlobDetector_create(blob_params)
+
+    # Detect blobs.
+    keypoints = sbd.detect(img_thresh)
+
+    # Draw circles around any detected blobs.
+    # cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS ensures the size of the circle
+    # corresponds to the size of blob
+    img_thresh = cv.drawKeypoints(img_thresh, keypoints, np.array([]),
+                                  (0, 0, 255),
+                                  cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+
+    # Image windows for this experiment.
+    o_window = "Original Image"
+    t_window = "Thresholded, Subtracted, Blob-Detected"
+    cv.namedWindow(o_window, cv.WINDOW_AUTOSIZE)
+    cv.namedWindow(t_window, cv.WINDOW_AUTOSIZE)
+    cv.imshow(o_window, img)
+    cv.imshow(t_window, img_thresh)
+    cv.waitKey(0)
     return
 
+
 if __name__ == "__main__":
-    # experiment_threshold("data/train/10003_right.jpeg")
-    # experiment_threshold("data/train/1000_left.jpeg")
-    experiment_hough("data/train/10003_right.jpeg")
-    # experiment_hough("data/train/1000_left.jpeg")
+    import os
+    dir_path = "data/train"
+    for file_path in os.listdir(dir_path):
+        path = "{}/{}".format(dir_path, file_path)
+        # experiment_threshold(path)
+        experiment_hough(path)
+        # experiment_notch_detection(path)
