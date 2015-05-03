@@ -62,8 +62,84 @@ import cv2 as cv
 STD_WIDTH = 512
 STD_HEIGHT = 512
 
-# Thresholding parameter. Determined experimentally.
+# Thresholding parameter.
 THRESH = 22
+
+# Hough Circle Transform parameters.
+DP = 1  # Inverse accumulator ratio.
+MD = STD_HEIGHT  # Minimum distance between circles.
+P1 = 140
+P2 = 30
+MIN_R = int(STD_HEIGHT * 0.4)
+MAX_R = STD_HEIGHT
+
+
+def load_image(path, grayscale=True, equalize=True, resize=True):
+    """
+    Loads an image in numpy format, reduces to grayscale, equalizes the image,
+    and finally resizes the image to a standard resolution. Each operation is
+    default but optional.
+    :param path: Path to the image file.
+    :param grayscale: Flag for converting image to grayscale.
+    :param equalize: Flag for equalizing the image's histogram.
+    :param resize: Flag for resizing the image to standard resolution.
+    :rtype: np.ndarray
+    """
+
+    img_in = cv.imread(path, cv.IMREAD_GRAYSCALE if grayscale else -1)
+    if equalize:
+        cv.equalizeHist(img_in, img_in)
+
+    if resize:
+        ratio = float(STD_HEIGHT) / img_in.shape[0]  # Resize based on height.
+        img_in = cv.resize(img_in, None,
+                           fx=ratio,
+                           fy=ratio,
+                           interpolation=cv.INTER_AREA)
+
+    return img_in
+
+
+def hough_circles(img):
+    """
+    Apply Hough Circle Transform using global parameters and returns data in
+    a nice list-of-tuples format. If no circles are found, the empty list is
+    returned.
+    :param np.ndarray img: The image to search for circles.
+    :returns: List of tuples of the form (x, y, radius)
+    :rtype: list[(int, int, float)]
+    """
+    global DP, MD, P1, P2, MIN_R, MAX_R
+    circles = cv.HoughCircles(img, cv.HOUGH_GRADIENT, DP, MD,
+                              param1=P1, param2=P2,
+                              minRadius=MIN_R, maxRadius=MAX_R)
+
+    output = []
+    if circles is not None:
+        circles = circles[0]  # Why are tuples buried like this? Bug?
+        for c in circles[0:]:
+            output.append((c[0], c[1], c[2]))
+
+    return output
+
+
+def draw_hough_circles(img, circles):
+    """
+    Creates new image from img with circles drawn over it. Will convert the
+    output image to RGB space.
+    :param np.ndarray img:
+    :param list[(int, int, float)] circles: Detected circles.
+    :rtype: np.ndarray
+    """
+    if circles:
+        output = cv.cvtColor(img.copy(), cv.COLOR_GRAY2RGB)
+        for c in circles:
+            x, y, r = c
+            cv.circle(output, (x, y), r, (0, 0, 255), 2)
+    else:
+        output = img
+
+    return output
 
 
 def experiment_threshold(path):
@@ -71,11 +147,8 @@ def experiment_threshold(path):
     Launches experiment window for thresholding.
     :param str path: Path to the experiment image file.
     """
-    img_in = cv.imread(path, cv.IMREAD_GRAYSCALE)
-    cv.equalizeHist(img_in, img_in)
-    ratio = float(STD_HEIGHT) / img_in.shape[0]  # Resize based on height.
-    img_resize = cv.resize(img_in, None, fx=ratio, fy=ratio, interpolation=cv.INTER_AREA)
-    _, thresh_img = cv.threshold(img_resize, 0, 255, cv.THRESH_BINARY)
+    img = load_image(path)
+    _, thresh_img = cv.threshold(img, 0, 255, cv.THRESH_BINARY)
 
     # Image windows for this experiment.
     t_window = "Threshold Experiment"
@@ -85,47 +158,64 @@ def experiment_threshold(path):
 
     # Callback for parameter slider (instantiated afterward).
     def thresh_callback(pos):
-        cv.threshold(img_resize, pos, 255, cv.THRESH_BINARY, dst=thresh_img)
+        cv.threshold(img, pos, 255, cv.THRESH_BINARY, dst=thresh_img)
         cv.imshow(t_window, thresh_img)
         return
 
     # Create the experiment and original image windows.
     cv.createTrackbar("Threshold", t_window, 0, 255, thresh_callback)
     cv.imshow(t_window, thresh_img)
-    cv.imshow(o_window, img_resize)
+    cv.imshow(o_window, img)
     cv.waitKey(0)
     return
 
 
-# def experiment_hough(path):
-#     """
-#     Launches experiment window for the Hough Circle Transformation.
-#     :param str path: Path to the experiment image file.
-#     """
-#     img_in = cv.imread(path, cv.IMREAD_GRAYSCALE)
-#     cv.equalizeHist(img_in, img_in)
-#     ratio = float(STD_HEIGHT) / img_in.shape[0]  # Resize based on height.
-#     img_resize = cv.resize(img_in, None, fx=ratio, fy=ratio, interpolation=cv.INTER_AREA)
-#     _, thresh_img = cv.threshold(img_resize, THRESH, 255, cv.THRESH_BINARY)
-#
-#     # Image windows for this experiment.
-#     t_window = "Hough Circle Transform Experiment"
-#     cv.namedWindow(t_window, cv.WINDOW_AUTOSIZE)
-#
-#     # Callback for parameter slider (instantiated afterward).
-#     def thresh_callback(pos):
-#         cv.threshold(img_resize, pos, 255, cv.THRESH_BINARY, dst=thresh_img)
-#         cv.imshow(t_window, thresh_img)
-#         return
-#
-#     cv.HoughCircles(img_resize, cv.HOUGH_STANDARD, 1, 300)
-#
-#     # Create the experiment and original image windows.
-#     cv.createTrackbar("Threshold", t_window, 0, 255, thresh_callback)
-#     cv.imshow(t_window, thresh_img)
-#     cv.imshow(o_window, img_resize)
-#     cv.waitKey(0)
+def experiment_hough(path):
+    """
+    Launches experiment window for the Hough Circle Transformation.
+    :param str path: Path to the experiment image file.
+    """
+    # Threshold the image first to get rid of pesky noise.
+    img = load_image(path)
 
+    # Image windows for this experiment.
+    t_window = "Hough Circle Transform Experiment"
+    cv.namedWindow(t_window, cv.WINDOW_AUTOSIZE)
+
+    # Callbacks for parameter sliders (instantiated afterward).
+    def dp_callback(pos):
+        global DP
+        DP = pos
+        cv.imshow(t_window, draw_hough_circles(img, hough_circles(img)))
+        return
+
+    def p1_callback(pos):
+        global P1
+        P1 = pos
+        cv.imshow(t_window, draw_hough_circles(img, hough_circles(img)))
+        return
+
+    def p2_callback(pos):
+        global P2
+        P2 = pos
+        cv.imshow(t_window, draw_hough_circles(img, hough_circles(img)))
+        # cv.imshow(t_window, hough_draw(img))
+        return
+
+    # Create the experiment and original image windows.
+    cv.createTrackbar("DP", t_window, DP, 10, dp_callback)
+    cv.createTrackbar("P1", t_window, P1, 255, p1_callback)
+    cv.createTrackbar("P2", t_window, P2, 255, p2_callback)
+    cv.imshow(t_window, draw_hough_circles(img, hough_circles(img)))
+    cv.waitKey(0)
+
+
+def experiment_blob(path):
+
+    return
 
 if __name__ == "__main__":
-    experiment_threshold("data/train/1000_left.jpeg")
+    # experiment_threshold("data/train/10003_right.jpeg")
+    # experiment_threshold("data/train/1000_left.jpeg")
+    experiment_hough("data/train/10003_right.jpeg")
+    # experiment_hough("data/train/1000_left.jpeg")
