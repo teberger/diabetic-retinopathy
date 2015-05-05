@@ -58,22 +58,27 @@ First method: PCA.
 
 import cv2 as cv
 import numpy as np
+import math
 
 # Standard resolution of images after processing.
-STD_WIDTH = 512
-STD_HEIGHT = 512
+STD_RES = 512
 
 # Thresholding parameter.
-# THRESH = 22
-THRESH = 12
+# THRESH = 12  # For blob detection
+THRESH = 30  # For edge detection
+
+# Canny edge detection parameters.
+LOW_THRESH = 0
+MAX_THRESH = 255
+KERNEL = 3
 
 # Hough Circle Transform parameters.
 DP = 1  # Inverse accumulator ratio.
-MD = STD_HEIGHT  # Minimum distance between circles.
+MD = STD_RES  # Minimum distance between circles.
 P1 = 140
 P2 = 30
-MIN_R = int(STD_HEIGHT * 0.4)
-MAX_R = STD_HEIGHT
+MIN_R = int(STD_RES * 0.4)
+MAX_R = STD_RES
 
 
 def load_image(path, grayscale=True, equalize=False, resize=True):
@@ -93,7 +98,7 @@ def load_image(path, grayscale=True, equalize=False, resize=True):
         cv.equalizeHist(img_in, img_in)
 
     if resize:
-        ratio = float(STD_HEIGHT) / img_in.shape[0]  # Resize based on height.
+        ratio = float(STD_RES) / img_in.shape[0]  # Resize based on height.
         img_in = cv.resize(img_in, None,
                            fx=ratio,
                            fy=ratio,
@@ -145,6 +150,41 @@ def hough_circles(img):
             output.append((c[0], c[1], c[2]))
 
     return output
+
+
+def bb_resize(img):
+    """
+    Resizes an image using bounding boxes. This is done by thresholding the
+    image and then calculating its bounding box. The shorter dimension of the
+    bounding box is then expanded (with black pixels) to make the bounding box
+    square. The pixels in the bounding box are moved to a new image, which is
+    then resized to a standard resolution.
+
+    This effect of this process should be that any eyeball image is roughly
+    centered at the same position and about the same size. This is important for
+    notch detection so that a small square can be placed approximately over
+    where the notch should be in a standardized image.
+    """
+    img_thresh = threshold(img)
+    x, y, w, h = cv.boundingRect(img_thresh)
+
+    # Destination canvas is square, length of max dimension of the bb.
+    max_wh = max(w, h)
+    img_expand = np.zeros((max_wh, max_wh), dtype=np.uint8)
+
+    # Copy the bounding box (region of interest) into the center of the
+    # destination canvas. This will produce black bars on the short side.
+    diff_w = max_wh - w
+    diff_h = max_wh - h
+    half_dw = int(math.floor(diff_w / 2.0))
+    half_dh = int(math.floor(diff_h / 2.0))
+    roi = img[y:y + h, x:x + w]
+    img_expand[half_dh:(half_dh + h), half_dw:(half_dw + w)] = roi
+
+    # Resize to our standard resolution.
+    img_resize = cv.resize(img_expand,
+                           (STD_RES, STD_RES),
+                           interpolation=cv.INTER_AREA)
 
 
 def draw_hough_circles(img, circles):
@@ -223,7 +263,6 @@ def experiment_hough(path):
         global P2
         P2 = pos
         cv.imshow(t_window, draw_hough_circles(img, hough_circles(img)))
-        # cv.imshow(t_window, hough_draw(img))
         return
 
     # Create the experiment and original image windows.
@@ -234,7 +273,30 @@ def experiment_hough(path):
     cv.waitKey(0)
 
 
+def experiment_edge_detect(path):
+    img = load_image(path)
+    img = threshold(img)
+    edges = cv.Canny(img, LOW_THRESH, MAX_THRESH, apertureSize=KERNEL)
+
+    # Image windows for this experiment.
+    t_window = "Canny Edge Detect Experiment"
+    cv.namedWindow(t_window, cv.WINDOW_AUTOSIZE)
+
+    # Callbacks for parameter sliders (instantiated afterward).
+    def low_thresh_callback(pos):
+        global LOW_THRESH
+        LOW_THRESH = pos
+        edges = cv.Canny(img, LOW_THRESH, MAX_THRESH, apertureSize=KERNEL)
+        cv.imshow(t_window, edges)
+        return
+
+    cv.createTrackbar("Low Threshold", t_window, LOW_THRESH, 255, low_thresh_callback)
+    cv.imshow(t_window, edges)
+    cv.waitKey(0)
+
+
 def experiment_notch_detection(path):
+    """ Notch detection via circle subtraction and blob detection. """
     # Get thresholded image and hough circles.
     img = load_image(path)
     img_thresh = threshold(img)
@@ -293,11 +355,45 @@ def experiment_notch_detection(path):
     return
 
 
+def experiment_bounding_box(path):
+    """ Bounding box resizing experiment. """
+
+    # Calculate initial bounding box via thresholded image.
+    img = load_image(path, resize=False)
+    img_thresh = threshold(img)
+    x, y, w, h = cv.boundingRect(img_thresh)
+
+    max_wh = max(w, h)
+    diff_w = max_wh - w
+    diff_h = max_wh - h
+    half_dw = int(math.floor(diff_w / 2.0))
+    half_dh = int(math.floor(diff_h / 2.0))
+    img_expand = np.zeros((max_wh, max_wh), dtype=np.uint8)
+    roi = img[y:y + h, x:x + w]
+    img_expand[half_dh:(half_dh + h), half_dw:(half_dw + w)] = roi
+
+    img_resize = cv.resize(img_expand,
+                           (STD_RES, STD_RES),
+                           interpolation=cv.INTER_AREA)
+
+    r_window = "Resized Image"
+    cv.namedWindow(r_window, cv.WINDOW_AUTOSIZE)
+    cv.imshow(r_window, img_resize)
+
+    cv.waitKey(0)
+
+
 if __name__ == "__main__":
     import os
     dir_path = "data/train"
+
+    # experiment_bounding_box("data/train/10015_left.jpeg")
+    # experiment_bounding_box("data/train/10015_right.jpeg")
+
     for file_path in os.listdir(dir_path):
         path = "{}/{}".format(dir_path, file_path)
         # experiment_threshold(path)
-        experiment_hough(path)
+        # experiment_hough(path)
+        # experiment_edge_detect(path)
         # experiment_notch_detection(path)
+        experiment_bounding_box(path)
