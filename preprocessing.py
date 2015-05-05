@@ -73,12 +73,24 @@ MAX_THRESH = 255
 KERNEL = 3
 
 # Hough Circle Transform parameters.
-DP = 1  # Inverse accumulator ratio.
+DP = 2  # Inverse accumulator ratio.
 MD = STD_RES  # Minimum distance between circles.
 P1 = 140
 P2 = 30
 MIN_R = int(STD_RES * 0.4)
 MAX_R = STD_RES
+
+# Blob detection parameters (for notch detection).
+BLOB_PARAMS = cv.SimpleBlobDetector_Params()
+BLOB_PARAMS.minThreshold = 0.0
+BLOB_PARAMS.maxThreshold = THRESH
+BLOB_PARAMS.thresholdStep = THRESH / 2
+BLOB_PARAMS.filterByArea = False
+BLOB_PARAMS.filterByColor = False
+BLOB_PARAMS.filterByConvexity = False
+BLOB_PARAMS.filterByInertia = True
+BLOB_PARAMS.minInertiaRatio = 0.05
+BLOB_PARAMS.maxInertiaRatio = 1
 
 
 def load_image(path, grayscale=True, equalize=False, resize=True):
@@ -98,11 +110,7 @@ def load_image(path, grayscale=True, equalize=False, resize=True):
         cv.equalizeHist(img_in, img_in)
 
     if resize:
-        ratio = float(STD_RES) / img_in.shape[0]  # Resize based on height.
-        img_in = cv.resize(img_in, None,
-                           fx=ratio,
-                           fy=ratio,
-                           interpolation=cv.INTER_AREA)
+        img_in = bb_resize(img_in, threshold(img_in))
 
     return img_in
 
@@ -124,15 +132,11 @@ def hough_circles(img):
     """
     global DP, MD, P1, P2, MIN_R, MAX_R
 
-    #TODO TESTING
+    # Black out the NW, SW, and SE quadrants to force Hough detection to align
+    # to notch edge. This is done to hopefully reduce the amount of "edge" that
+    # is left over after subtraction.
     h, w = img.shape
     half_h, half_w = (int(h / 2), int(w / 2))
-
-    # cv.rectangle(img, (0, 0), (half_w, half_h),
-    #              (0, 0, 0), thickness=cv.FILLED)
-    # cv.rectangle(img, (half_w, half_h), (w, h),
-    #              (0, 0, 0), thickness=cv.FILLED)
-
     cv.rectangle(img, (0, 0), (half_w, h),
                  (0, 0, 0), thickness=cv.FILLED)
     cv.rectangle(img, (0, h), (w, half_h),
@@ -141,7 +145,6 @@ def hough_circles(img):
     circles = cv.HoughCircles(img, cv.HOUGH_GRADIENT, DP, MD,
                               param1=P1, param2=P2,
                               minRadius=MIN_R, maxRadius=MAX_R)
-    #TODO TESTING
 
     output = []
     if circles is not None:
@@ -152,7 +155,7 @@ def hough_circles(img):
     return output
 
 
-def bb_resize(img):
+def bb_resize(img, img_thresh):
     """
     Resizes an image using bounding boxes. This is done by thresholding the
     image and then calculating its bounding box. The shorter dimension of the
@@ -165,7 +168,6 @@ def bb_resize(img):
     notch detection so that a small square can be placed approximately over
     where the notch should be in a standardized image.
     """
-    img_thresh = threshold(img)
     x, y, w, h = cv.boundingRect(img_thresh)
 
     # Destination canvas is square, length of max dimension of the bb.
@@ -185,6 +187,52 @@ def bb_resize(img):
     img_resize = cv.resize(img_expand,
                            (STD_RES, STD_RES),
                            interpolation=cv.INTER_AREA)
+
+    return img_resize
+
+
+def detect_notch(img, img_thresh):
+    """
+
+    """
+    circles = hough_circles(img)
+
+    # Paint out the first circle detected. Assume that only one circle was
+    # detected for whole image. If no circles are detected, fail fast and just
+    # return false.
+    if circles:
+        x, y, r = circles[0]
+        cv.circle(img_thresh, (x, y), r, (0, 0, 0), cv.FILLED)
+    else:
+        return False
+
+    # Erode what's left to try and remove edges.
+    img_thresh = cv.erode(img_thresh, np.ones((3, 3), np.uint8))
+    img_thresh = cv.dilate(img_thresh, np.ones((3, 3), np.uint8))
+
+    # Extract a region of interest that is very likely to contain the notch if
+    # one is present in the image. This corresponds to a small square at about
+    # the 45 degree mark on the eyeball. Some notches are slightly lower than
+    # this, so the ROI should be large enough to capture many notch positions.
+    ratio = 1.0 / 4.0
+    roi_size = img_thresh.shape[0] * ratio
+    half_rs = roi_size / 2.0
+
+    # Do a little trig to find cartesian coordinates of 45 degrees point.
+    radius = img_thresh.shape[0] / 2.0
+    angle = math.pi / 4.0
+    side = radius * math.sin(angle)
+
+    # Get the damned ROI.
+    x, y = (int(radius + side - half_rs), int(radius - side - half_rs))
+    roi = img_thresh[y:int(y + roi_size), x:int(x + roi_size)]
+
+    # Run blob detection on what's left.
+    sbd = cv.SimpleBlobDetector_create(BLOB_PARAMS)
+    keypoints = sbd.detect(roi)
+
+    # If keypoints were found, then we assume that a notch was detected.
+    return keypoints is True
 
 
 def draw_hough_circles(img, circles):
@@ -307,18 +355,27 @@ def experiment_notch_detection(path):
     x, y, r = circles[0]
     cv.circle(img_thresh, (x, y), r, (0, 0, 0), cv.FILLED)
 
-    # Paint out the NW, SW, and SE quadrants of the image as only the
-    # NE quadrant will contain a notch if present.
-    h, w = img_thresh.shape
-    half_h, half_w = (int(h / 2), int(w / 2))
-    cv.rectangle(img_thresh, (0, 0), (half_w, h),
-                 (0, 0, 0), thickness=cv.FILLED)
-    cv.rectangle(img_thresh, (0, h), (w, half_h),
-                 (0, 0, 0), thickness=cv.FILLED)
-
     # Erode what's left to try and remove edges.
     img_thresh = cv.erode(img_thresh, np.ones((3, 3), np.uint8))
     img_thresh = cv.dilate(img_thresh, np.ones((3, 3), np.uint8))
+
+    # Extract a region of interest that is very likely to contain the notch if
+    # one is present in the image. This corresponds to a small square at about
+    # the 45 degree mark on the eyeball. Some notches are slightly lower than
+    # this, so the ROI should be large enough to capture many notch positions.
+    ratio = 1.0 / 4.0
+    roi_size = img_thresh.shape[0] * ratio
+    half_rs = roi_size / 2.0
+
+    # Do a little trig to find cartesian coordinates of 45 degrees point.
+    radius = img_thresh.shape[0] / 2.0
+    angle = math.pi / 4.0
+    side = radius * math.sin(angle)
+
+    # Get the damned ROI.
+    x, y = (int(radius + side - half_rs), int(radius - side - half_rs))
+    cv.rectangle(img, (x, y), (x + int(roi_size), y + int(roi_size)), (255, 255, 255))
+    roi = img_thresh[y:int(y + roi_size), x:int(x + roi_size)]
 
     # Run blob detection on what's left.
     # Set up the detector with default parameters.
@@ -329,20 +386,20 @@ def experiment_notch_detection(path):
     blob_params.filterByArea = False
     blob_params.filterByColor = False
     blob_params.filterByConvexity = False
-    # blob_params.filterByInertia = False
+    blob_params.filterByInertia = True
     blob_params.minInertiaRatio = 0.05
     blob_params.maxInertiaRatio = 1
     sbd = cv.SimpleBlobDetector_create(blob_params)
 
     # Detect blobs.
-    keypoints = sbd.detect(img_thresh)
+    keypoints = sbd.detect(roi)
 
     # Draw circles around any detected blobs.
     # cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS ensures the size of the circle
     # corresponds to the size of blob
-    img_thresh = cv.drawKeypoints(img_thresh, keypoints, np.array([]),
-                                  (0, 0, 255),
-                                  cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    roi = cv.drawKeypoints(roi, keypoints, np.array([]),
+                           (0, 0, 255),
+                           cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
 
     # Image windows for this experiment.
     o_window = "Original Image"
@@ -350,7 +407,7 @@ def experiment_notch_detection(path):
     cv.namedWindow(o_window, cv.WINDOW_AUTOSIZE)
     cv.namedWindow(t_window, cv.WINDOW_AUTOSIZE)
     cv.imshow(o_window, img)
-    cv.imshow(t_window, img_thresh)
+    cv.imshow(t_window, roi)
     cv.waitKey(0)
     return
 
@@ -389,11 +446,12 @@ if __name__ == "__main__":
 
     # experiment_bounding_box("data/train/10015_left.jpeg")
     # experiment_bounding_box("data/train/10015_right.jpeg")
+    experiment_notch_detection("data/train/10013_right.jpeg")
 
-    for file_path in os.listdir(dir_path):
-        path = "{}/{}".format(dir_path, file_path)
-        # experiment_threshold(path)
-        # experiment_hough(path)
-        # experiment_edge_detect(path)
-        # experiment_notch_detection(path)
-        experiment_bounding_box(path)
+    # for file_path in os.listdir(dir_path):
+    #     path = "{}/{}".format(dir_path, file_path)
+    #     # experiment_threshold(path)
+    #     # experiment_hough(path)
+    #     # experiment_edge_detect(path)
+    #     experiment_notch_detection(path)
+    #     # experiment_bounding_box(path)
