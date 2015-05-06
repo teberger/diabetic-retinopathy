@@ -64,7 +64,6 @@ import math
 STD_RES = 512
 
 # Thresholding parameter.
-# THRESH = 12  # For blob detection
 THRESH = 30  # For edge detection
 
 # Canny edge detection parameters.
@@ -91,6 +90,43 @@ BLOB_PARAMS.filterByConvexity = False
 BLOB_PARAMS.filterByInertia = True
 BLOB_PARAMS.minInertiaRatio = 0.05
 BLOB_PARAMS.maxInertiaRatio = 1
+
+
+def preprocess_image(path):
+    """
+    Loads an image, converts to grayscale, flips the image if necessary based
+    on which eye it is and if there is a notch present, and equalizes the
+    image's histogram.
+    :param str path: Path to an image.
+    :rtype: numpy.ndarray
+    """
+    # Loading the image also converts it to grayscale.
+    img = load_image(path)
+    img_thresh = threshold(img)
+
+    # Two-part notch-detection. Notch could be in upper-right quadrant, or it
+    # could be in the bottom-right quadrant. Try the upper-right corner first -
+    # if it's not there, try the bottom-right. If still no notch is detected,
+    # assume there is no notch present and do no inversion.
+    if detect_notch(img, img_thresh):
+        cv.flip(img, -1, img)
+        print "Notch detected in image {}.".format(path.split('/')[-1])
+    else:
+        vert_flip = cv.flip(img, 0)
+        vert_flip_thresh = cv.flip(img_thresh, 0)
+
+        if detect_notch(vert_flip, vert_flip_thresh):
+            cv.flip(img, -1, img)
+            print "Notch detected in image {}.".format(path.split('/')[-1])
+
+    # Examine the file name and flip the eye horizontally if it's a left eye.
+    if "left" in path:
+        cv.flip(img, 1, img)
+
+    # Finally, equalize the image.
+    cv.equalizeHist(img, img)
+
+    return img
 
 
 def load_image(path, grayscale=True, equalize=False, resize=True):
@@ -131,6 +167,7 @@ def hough_circles(img):
     :rtype: list[(int, int, float)]
     """
     global DP, MD, P1, P2, MIN_R, MAX_R
+    img = img.copy()
 
     # Black out the NW, SW, and SE quadrants to force Hough detection to align
     # to notch edge. This is done to hopefully reduce the amount of "edge" that
@@ -193,7 +230,19 @@ def bb_resize(img, img_thresh):
 
 def detect_notch(img, img_thresh):
     """
+    Detects if a notch is present in the image, and if so, returns True.
 
+    First, the Hough Circle Transform is applied to find a circle corresponding
+    to the entire eyeball. This circle is subtracted from the thresholded
+    image of the eyeball. Ideally what is left at this point will be either
+    a notch, or nothing. Since we will likely pick up "shreds" left from the
+    edges of the subtraction, we contract and dilate at this point to remove
+    leftovers.
+
+    A region of interest is positioned over where notches appear usually,
+    which is at about the 45 degree mark on the eyeball in the NE quadrant.
+    Blob detection is run over this ROI. If a blob is detected, it is assumed
+    that the blob is a notch, and the function can return True.
     """
     circles = hough_circles(img)
 
@@ -232,7 +281,7 @@ def detect_notch(img, img_thresh):
     keypoints = sbd.detect(roi)
 
     # If keypoints were found, then we assume that a notch was detected.
-    return keypoints is True
+    return bool(keypoints)
 
 
 def draw_hough_circles(img, circles):
@@ -443,15 +492,15 @@ def experiment_bounding_box(path):
 if __name__ == "__main__":
     import os
     dir_path = "data/train"
+    output_path = "data/train/output"
 
-    # experiment_bounding_box("data/train/10015_left.jpeg")
-    # experiment_bounding_box("data/train/10015_right.jpeg")
-    experiment_notch_detection("data/train/10013_right.jpeg")
+    if not os.path.exists(output_path):
+        os.mkdir(output_path)
 
-    # for file_path in os.listdir(dir_path):
-    #     path = "{}/{}".format(dir_path, file_path)
-    #     # experiment_threshold(path)
-    #     # experiment_hough(path)
-    #     # experiment_edge_detect(path)
-    #     experiment_notch_detection(path)
-    #     # experiment_bounding_box(path)
+    for file_name in os.listdir(dir_path):
+        if "jpeg" in file_name:
+            path = "{}/{}".format(dir_path, file_name)
+            output = "{}/{}".format(output_path, file_name)
+            new_img = preprocess_image(path)
+            cv.imwrite(output, new_img)
+
