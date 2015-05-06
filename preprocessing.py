@@ -207,6 +207,12 @@ def bb_resize(img, img_thresh):
     """
     x, y, w, h = cv.boundingRect(img_thresh)
 
+    # If no bounding rectangle was able to be formed, then the image is
+    # probably completely unusable. Simply resize to standard resolution and
+    # move on.
+    if (w == 0) or (h == 0):
+        return cv.resize(img, (STD_RES, STD_RES), interpolation=cv.INTER_AREA)
+
     # Destination canvas is square, length of max dimension of the bb.
     max_wh = max(w, h)
     img_expand = np.zeros((max_wh, max_wh), dtype=np.uint8)
@@ -221,11 +227,7 @@ def bb_resize(img, img_thresh):
     img_expand[half_dh:(half_dh + h), half_dw:(half_dw + w)] = roi
 
     # Resize to our standard resolution.
-    img_resize = cv.resize(img_expand,
-                           (STD_RES, STD_RES),
-                           interpolation=cv.INTER_AREA)
-
-    return img_resize
+    return cv.resize(img_expand, (STD_RES, STD_RES), interpolation=cv.INTER_AREA)
 
 
 def detect_notch(img, img_thresh):
@@ -491,8 +493,8 @@ def experiment_bounding_box(path):
 
 if __name__ == "__main__":
     import os
-    dir_path = "data/train"
-    output_path = "data/train/output"
+    dir_path = "D:/ml/train"
+    output_path = "D:/ml/train/output"
 
     if not os.path.exists(output_path):
         os.mkdir(output_path)
@@ -503,4 +505,3 @@ if __name__ == "__main__":
             output = "{}/{}".format(output_path, file_name)
             new_img = preprocess_image(path)
             cv.imwrite(output, new_img)
-
