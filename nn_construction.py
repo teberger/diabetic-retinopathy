@@ -14,11 +14,11 @@ def constructNet(self,
     nb_filters = int(image_size / 32)
 
     for i in xrange(nb_layers -1):
-        # filter size of 15x15 is used since we have relatively large
+        # filter size of 12x12 is used since we have relatively large
         # images
-        model.add(Convolution2D(nb_filters, STACK_SIZE, 15, 15))
+        model.add(Convolution2D(nb_filters, STACK_SIZE, 12, 12))
         model.add(Activation('relu'))
-        model.add(Convolution2D(nb_filters, nb_filter, 15, 15))
+        model.add(Convolution2D(nb_filters, nb_filter, 12, 12))
         model.add(Activation('relu'))
         model.add(MaxPooling2D(poolsize=(2,2)))
         model.add(Dropout(0.25))
